@@ -1,17 +1,19 @@
+use clap::Parser;
 use mini_grep::search;
-use std::env;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// The string to search for
+    needle: String,
+    /// The path to the file to search in
+    path: String,
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        eprintln!("Usage: {} <needle> <path>", args[0]);
-        std::process::exit(1);
-    }
+    let args = Args::parse();
 
-    let needle = &args[1];
-    let path = &args[2];
-
-    match search(needle, path) {
+    match search(args.needle.as_str(), args.path) {
         Ok(matches) => {
             for m in matches {
                 println!(
