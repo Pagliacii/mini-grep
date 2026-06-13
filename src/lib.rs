@@ -68,11 +68,18 @@ fn search_in_file(needle: &str, path: impl AsRef<Path>) -> SearchResult {
 fn search_in_dir(needle: &str, path: impl AsRef<Path>) -> SearchResult {
     let dir = path.as_ref();
     let mut results = Vec::new();
+
+    let mut entries = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
+        entries.push((path, file_type));
+    }
 
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    for (path, file_type) in entries {
         if file_type.is_file() {
             results.extend(search_in_file(needle, &path)?);
         } else if file_type.is_dir() {
@@ -254,5 +261,30 @@ mod tests {
         assert_eq!(matches[1].path(), file2_path.as_path());
         assert_eq!(matches[1].line_number(), 1);
         assert_eq!(matches[1].content(), "needle in the nested haystack");
+    }
+
+    #[test]
+    fn test_find_in_directory_returns_matches_sorted_by_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nested_dir = temp_dir.path().join("a_dir");
+        fs::create_dir(&nested_dir).unwrap();
+
+        let later_path = temp_dir.path().join("z_file.txt");
+        let earlier_path = nested_dir.join("a_file.txt");
+
+        let mut later_file = File::create(&later_path).unwrap();
+        writeln!(later_file, "needle in root file").unwrap();
+
+        let mut earlier_file = File::create(&earlier_path).unwrap();
+        writeln!(earlier_file, "needle in nested file").unwrap();
+
+        let res = search("needle", temp_dir.path());
+        assert!(res.is_ok());
+        let matches = res.unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].path(), earlier_path.as_path());
+        assert_eq!(matches[0].content(), "needle in nested file");
+        assert_eq!(matches[1].path(), later_path.as_path());
+        assert_eq!(matches[1].content(), "needle in root file");
     }
 }
