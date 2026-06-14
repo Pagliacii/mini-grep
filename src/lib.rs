@@ -35,14 +35,29 @@ impl SearchMatch {
 
 type SearchResult = io::Result<Vec<SearchMatch>>;
 
-pub fn search(needle: &str, path: impl AsRef<Path>) -> SearchResult {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SearchOptions {
+    case_insensitive: bool,
+    recursive: bool,
+}
+
+impl SearchOptions {
+    pub fn new(case_insensitive: bool, recursive: bool) -> Self {
+        Self {
+            case_insensitive,
+            recursive,
+        }
+    }
+}
+
+pub fn search(needle: &str, path: impl AsRef<Path>, options: SearchOptions) -> SearchResult {
     let path = path.as_ref();
     let metadata = fs::metadata(path)?;
 
     if metadata.is_file() {
-        search_in_file(needle, path)
+        search_in_file(needle, path, options)
     } else if metadata.is_dir() {
-        search_in_dir(needle, path)
+        search_in_dir(needle, path, options)
     } else {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -51,21 +66,32 @@ pub fn search(needle: &str, path: impl AsRef<Path>) -> SearchResult {
     }
 }
 
-fn search_in_file(needle: &str, path: impl AsRef<Path>) -> SearchResult {
+fn search_in_file(needle: &str, path: impl AsRef<Path>, options: SearchOptions) -> SearchResult {
     let path = path.as_ref();
     let file = File::open(path)?;
     let buf = BufReader::new(file);
     let mut results = Vec::new();
+
+    let needle = if options.case_insensitive {
+        needle.to_lowercase()
+    } else {
+        needle.to_string()
+    };
     for (line_num, line) in buf.lines().enumerate() {
         let line = line?;
-        if line.contains(needle) {
+        let is_match = if options.case_insensitive {
+            line.to_lowercase().contains(&needle)
+        } else {
+            line.contains(&needle)
+        };
+        if is_match {
             results.push(SearchMatch::new(path, line_num + 1, &line));
         }
     }
     Ok(results)
 }
 
-fn search_in_dir(needle: &str, path: impl AsRef<Path>) -> SearchResult {
+fn search_in_dir(needle: &str, path: impl AsRef<Path>, options: SearchOptions) -> SearchResult {
     let dir = path.as_ref();
     let mut results = Vec::new();
 
@@ -81,9 +107,9 @@ fn search_in_dir(needle: &str, path: impl AsRef<Path>) -> SearchResult {
 
     for (path, file_type) in entries {
         if file_type.is_file() {
-            results.extend(search_in_file(needle, &path)?);
-        } else if file_type.is_dir() {
-            results.extend(search_in_dir(needle, &path)?);
+            results.extend(search_in_file(needle, &path, options)?);
+        } else if file_type.is_dir() && options.recursive {
+            results.extend(search_in_dir(needle, &path, options)?);
         }
     }
     Ok(results)
@@ -99,7 +125,7 @@ mod tests {
     fn test_find_in_one_file() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "needle in the haystack").unwrap();
-        let res = search("needle", file.path());
+        let res = search("needle", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         let got = res.unwrap();
         let expected = SearchMatch::new(file.path(), 1, "needle in the haystack");
@@ -112,7 +138,7 @@ mod tests {
         writeln!(file, "needle in the haystack").unwrap();
         writeln!(file, "emoji: 😀").unwrap();
 
-        let res = search("😀", file.path());
+        let res = search("😀", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 1);
@@ -128,7 +154,7 @@ mod tests {
         writeln!(file, "emoji: 😀").unwrap();
         writeln!(file, "这是一个测试").unwrap(); // Chinese
 
-        let res = search("测试", file.path());
+        let res = search("测试", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 1);
@@ -144,7 +170,7 @@ mod tests {
         writeln!(file, "emoji: 😀").unwrap();
         writeln!(file, "これはテストです").unwrap(); // Japanese
 
-        let res = search("テスト", file.path());
+        let res = search("テスト", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 1);
@@ -160,7 +186,7 @@ mod tests {
         writeln!(file, "emoji: 😀").unwrap();
         writeln!(file, "이것은 테스트입니다").unwrap(); // Korean
 
-        let res = search("테스트", file.path());
+        let res = search("테스트", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 1);
@@ -173,7 +199,7 @@ mod tests {
     fn test_find_not_in_one_file() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "needle in the haystack").unwrap();
-        let res = search("missing", file.path());
+        let res = search("missing", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         assert!(res.unwrap().is_empty());
     }
@@ -188,7 +214,7 @@ mod tests {
         writeln!(file, "这是另一个测试").unwrap(); // Chinese
         writeln!(file, "最后一个测试 😀").unwrap(); // Chinese
 
-        let res = search("😀", file.path());
+        let res = search("😀", file.path(), SearchOptions::default());
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 3);
@@ -202,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_open_non_existent_file() {
-        let res = search("needle", "non_existent_file.txt");
+        let res = search("needle", "non_existent_file.txt", SearchOptions::default());
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().kind(), io::ErrorKind::NotFound);
     }
@@ -227,7 +253,7 @@ mod tests {
         let mut file2 = File::create(&file2_path).unwrap();
         writeln!(file2, "no match here").unwrap();
 
-        let res = search("needle", temp_dir.path());
+        let res = search("needle", temp_dir.path(), SearchOptions::default());
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 1);
@@ -251,7 +277,22 @@ mod tests {
         let mut file2 = File::create(&file2_path).unwrap();
         writeln!(file2, "needle in the nested haystack").unwrap();
 
-        let res = search("needle", temp_dir.path());
+        let res = search("needle", temp_dir.path(), SearchOptions::default());
+        assert!(res.is_ok());
+        let matches = res.unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path(), file1_path.as_path());
+        assert_eq!(matches[0].line_number(), 1);
+        assert_eq!(matches[0].content(), "needle in the haystack");
+
+        let res = search(
+            "needle",
+            temp_dir.path(),
+            SearchOptions {
+                case_insensitive: false,
+                recursive: true,
+            },
+        );
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 2);
@@ -278,7 +319,7 @@ mod tests {
         let mut earlier_file = File::create(&earlier_path).unwrap();
         writeln!(earlier_file, "needle in nested file").unwrap();
 
-        let res = search("needle", temp_dir.path());
+        let res = search("needle", temp_dir.path(), SearchOptions::new(false, true));
         assert!(res.is_ok());
         let matches = res.unwrap();
         assert_eq!(matches.len(), 2);
@@ -286,5 +327,35 @@ mod tests {
         assert_eq!(matches[0].content(), "needle in nested file");
         assert_eq!(matches[1].path(), later_path.as_path());
         assert_eq!(matches[1].content(), "needle in root file");
+    }
+
+    #[test]
+    fn test_find_in_one_file_with_case_insensitive() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "needle in the haystack").unwrap();
+        writeln!(file, "NEEDLE IN THE HAYSTACK").unwrap();
+        let res = search("needle", file.path(), SearchOptions::default());
+        assert!(res.is_ok());
+        let got = res.unwrap();
+        let expected = SearchMatch::new(file.path(), 1, "needle in the haystack");
+        assert_eq!(got, vec![expected]);
+
+        let res = search(
+            "needle",
+            file.path(),
+            SearchOptions {
+                case_insensitive: true,
+                recursive: false,
+            },
+        );
+        assert!(res.is_ok());
+        let got = res.unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].path(), file.path());
+        assert_eq!(got[0].line_number(), 1);
+        assert_eq!(got[0].content(), "needle in the haystack");
+        assert_eq!(got[1].path(), file.path());
+        assert_eq!(got[1].line_number(), 2);
+        assert_eq!(got[1].content(), "NEEDLE IN THE HAYSTACK");
     }
 }
