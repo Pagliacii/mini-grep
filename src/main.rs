@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use mini_grep::{SearchOptions, search};
 
@@ -7,7 +9,7 @@ struct Args {
     /// The string to search for
     needle: String,
     /// The path to the file to search in
-    path: String,
+    path: PathBuf,
     /// Case insensitive search
     #[arg(short, long)]
     ignore_case: bool,
